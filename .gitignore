@@ -1,0 +1,41 @@
+# Visual Studio
+.vs/
+*.user
+*.userosscache
+*.suo
+*.userprefs
+
+# Build results
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio Code
+.vscode/
+
+# User-specific files
+*.rsuser
+
+# Test results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+*.trx
+
+# NuGet
+*.nupkg
+*.snupkg
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Local environment files
+.env
+.env.*
+
+# ASP.NET Core local secrets / certificates
+appsettings.*.local.json
+*.pfx
+*.p12
