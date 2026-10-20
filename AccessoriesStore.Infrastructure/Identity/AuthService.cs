@@ -6,6 +6,7 @@ using AccessoriesStore.Domain.Exceptions;
 using AccessoriesStore.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -18,20 +19,25 @@ namespace AccessoriesStore.Infrastructure.Identity
         private readonly IJwtService _jwtService;
         private readonly ApplicationDbContext _context;
         private readonly IEmailService _emailService;
+        private readonly IConfiguration _configuration;
 
         public AuthService(
             UserManager<ApplicationUser> userManager,
             SignInManager<ApplicationUser> signInManager,
             IJwtService jwtService,
             IEmailService emailService,
-            ApplicationDbContext context)
+            ApplicationDbContext context,
+            IConfiguration configuration)
         {
             _userManager = userManager;
             _signInManager = signInManager;
             _jwtService = jwtService;
             _context = context;
             _emailService = emailService;
+            _configuration = configuration;
         }
+
+        private string FrontendBaseUrl => _configuration["Frontend:BaseUrl"]?.TrimEnd('/') ?? "http://localhost:4200";
 
         public async Task<AuthResponse> RegisterAsync(RegisterRequest request)
         {
@@ -61,7 +67,7 @@ namespace AccessoriesStore.Infrastructure.Identity
             var encodedToken = Uri.EscapeDataString(confirmationToken);
 
             var confirmationLink =
-                $"https://localhost:7043/api/auth/confirm-email" +
+                $"{FrontendBaseUrl}/auth/confirm-email" +
                 $"?userId={user.Id}&token={encodedToken}";
 
             var emailBody = $"""
@@ -282,7 +288,7 @@ namespace AccessoriesStore.Infrastructure.Identity
             var encodedToken = Uri.EscapeDataString(resetToken);
 
             var resetLink =
-                $"https://localhost:7043/api/auth/reset-password" +
+                $"{FrontendBaseUrl}/auth/reset-password" +
                 $"?userId={user.Id}&token={encodedToken}";
 
             var emailBody = $"""

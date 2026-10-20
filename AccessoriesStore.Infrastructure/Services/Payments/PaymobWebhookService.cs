@@ -66,7 +66,12 @@ public class PaymobWebhookService
                 "Invalid Paymob order ID.");
         }
 
+        if (!_settings.PaymentMethodIds.Contains((int)callback.IntegrationId))
+            throw new UnauthorizedException(
+                "Paymob integration is not configured for this store.");
+
         var order = await _context.Orders
+            .AsNoTracking()
             .Include(x => x.Items)
             .FirstOrDefaultAsync(x =>
                 x.PaymobOrderId == callback.Order.Id);
@@ -76,6 +81,9 @@ public class PaymobWebhookService
             throw new NotFoundException(
                 "Order linked to Paymob transaction was not found.");
         }
+
+        var paymentAttempt = await _context.PaymentAttempts
+            .FirstOrDefaultAsync(x => x.PaymobOrderId == callback.Order.Id);
 
         if (!string.Equals(
                 callback.Currency,
@@ -98,27 +106,105 @@ public class PaymobWebhookService
 
         if (callback.IsRefunded)
         {
-            order.PaymentStatus = PaymentStatus.Refunded;
+            var refundedAmount = callback.RefundedAmountCents ?? 0;
+            if (paymentAttempt is not null)
+            {
+                var refundIncreased = refundedAmount > paymentAttempt.RefundedAmountCents;
+                paymentAttempt.RefundedAmountCents = Math.Max(paymentAttempt.RefundedAmountCents, refundedAmount);
+                paymentAttempt.Status = refundedAmount >= expectedAmountCents ? "Refunded" : "PartiallyRefunded";
+                paymentAttempt.UpdatedAt = DateTime.UtcNow;
+                paymentAttempt.PaymobTransactionId = callback.Id;
+                await _context.SaveChangesAsync();
+                if (refundIncreased && refundedAmount < expectedAmountCents)
+                    await NotifyPaymentAsync(order.UserId, "Partial refund processed", $"A partial refund for order #{order.Id} has been recorded.", $"/account/orders/{order.Id}");
+            }
+            // Paymob can send callbacks for partial refunds. Keep the order
+            // paid until the cumulative refunded amount covers the charge.
+            if (refundedAmount >= expectedAmountCents)
+            {
+                var refunded = await _context.Orders
+                    .Where(x => x.Id == order.Id &&
+                                x.PaymentStatus == PaymentStatus.Paid)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(x => x.PaymentStatus, PaymentStatus.Refunded));
+                if (refunded == 1)
+                    await NotifyPaymentAsync(order.UserId, "Refund completed", $"Your refund for order #{order.Id} has been confirmed.", $"/account/orders/{order.Id}");
+            }
         }
         else if (callback.IsVoided)
         {
-            order.PaymentStatus = PaymentStatus.Cancelled;
+            var changed = await _context.Orders
+                .Where(x => x.Id == order.Id &&
+                            x.PaymentStatus == PaymentStatus.Pending)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.PaymentStatus, PaymentStatus.Cancelled));
+
+            if (paymentAttempt is not null)
+            {
+                paymentAttempt.Status = "Voided";
+                paymentAttempt.PaymobTransactionId = callback.Id;
+                paymentAttempt.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+
+            if (changed == 1 &&
+                (order.Status == OrderStatus.Pending ||
+                 order.Status == OrderStatus.Confirmed))
+            {
+                await _orderService.CancelBySystemAsync(order.Id);
+            }
         }
         else if (callback.Success && !callback.Pending)
         {
-            if (order.PaymentStatus != PaymentStatus.Paid)
+            var paid = await _context.Orders
+                .Where(x => x.Id == order.Id &&
+                            (x.PaymentStatus == PaymentStatus.Pending ||
+                             x.PaymentStatus == PaymentStatus.Failed ||
+                             x.PaymentStatus == PaymentStatus.Cancelled))
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.PaymentStatus, PaymentStatus.Paid)
+                    .SetProperty(x => x.PaidAt, DateTime.UtcNow));
+            if (paid == 1)
+                await NotifyPaymentAsync(order.UserId, "Payment received", $"Payment for order #{order.Id} was successful.", $"/account/orders/{order.Id}");
+            if (paid == 1 && paymentAttempt is not null)
             {
-                order.PaymentStatus = PaymentStatus.Paid;
-                order.PaidAt = DateTime.UtcNow;
+                paymentAttempt.Status = "Paid";
+                paymentAttempt.PaymobTransactionId = callback.Id;
+                paymentAttempt.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
             }
         }
         else if (!callback.Success && !callback.Pending)
         {
-            order.PaymentStatus = PaymentStatus.Failed;
-
-            await _orderService.CancelBySystemAsync(order.Id);
+            var changed = await _context.Orders
+                .Where(x => x.Id == order.Id &&
+                            x.PaymentStatus == PaymentStatus.Pending)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.PaymentStatus, PaymentStatus.Failed)
+                    .SetProperty(x => x.PaymentIntentId, (string?)null)
+                    .SetProperty(x => x.PaymobOrderId, (long?)null));
+            if (paymentAttempt is not null)
+            {
+                paymentAttempt.Status = "Failed";
+                paymentAttempt.PaymobTransactionId = callback.Id;
+                paymentAttempt.UpdatedAt = DateTime.UtcNow;
+                await _context.SaveChangesAsync();
+            }
+            if (changed == 1)
+                await NotifyPaymentAsync(order.UserId, "Payment unsuccessful", $"Payment for order #{order.Id} was unsuccessful. You can retry payment from your orders.", $"/account/orders/{order.Id}");
         }
+    }
 
+    private async Task NotifyPaymentAsync(string userId, string title, string message, string link)
+    {
+        _context.Notifications.Add(new AccessoriesStore.Domain.Entities.StoreNotification
+        {
+            UserId = userId,
+            Title = title,
+            Message = message,
+            Type = "Payment",
+            Link = link
+        });
         await _context.SaveChangesAsync();
     }
 

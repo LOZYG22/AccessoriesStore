@@ -94,7 +94,21 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
 
                 order.Items.Add(orderItem);
 
-                cartItem.Product.StockQuantity -= cartItem.Quantity;
+                var stockChanged = await _context.Products
+                    .Where(product => product.Id == cartItem.ProductId &&
+                                      product.IsActive &&
+                                      product.StockQuantity >= cartItem.Quantity)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(
+                            product => product.StockQuantity,
+                            product => product.StockQuantity - cartItem.Quantity)
+                        .SetProperty(
+                            product => product.UpdatedAt,
+                            DateTime.UtcNow));
+
+                if (stockChanged != 1)
+                    throw new BadRequestException(
+                        $"Insufficient stock for product '{cartItem.Product.Name}'. Please refresh your cart.");
             }
 
             order.SubTotal = order.Items.Sum(x => x.TotalPrice);
@@ -111,6 +125,8 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
             await _context.SaveChangesAsync();
 
             await transaction.CommitAsync();
+
+            await NotifyAsync(userId, "Order received", $"Your order #{order.Id} has been received.", $"/account/orders/{order.Id}");
 
             return await GetByIdAsync(userId, order.Id);
         }
@@ -186,6 +202,7 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
             order.Status = OrderStatus.Confirmed;
 
             await _context.SaveChangesAsync();
+            await NotifyAsync(order.UserId, "Order confirmed", $"Your order #{order.Id} is ready for payment.", $"/account/orders/{order.Id}");
 
             return await GetByIdAsync(order.UserId, order.Id);
         }
@@ -232,9 +249,36 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
                     $"Cannot change order status from {order.Status} to {newStatus}.");
             }
 
-            order.Status = newStatus;
+            if (newStatus == OrderStatus.Cancelled &&
+                (order.PaymentStatus == PaymentStatus.Paid ||
+                 (order.PaymentStatus == PaymentStatus.Pending &&
+                  !string.IsNullOrWhiteSpace(order.PaymentIntentId))))
+                throw new BadRequestException(
+                    "Orders with a completed payment or an active payment session cannot be cancelled here.");
 
-            await _context.SaveChangesAsync();
+            if (newStatus == OrderStatus.Cancelled)
+            {
+                await CancelBySystemAsync(orderId);
+                return await GetByIdAsync(order.UserId, order.Id);
+            }
+
+            if ((newStatus == OrderStatus.Processing ||
+                 newStatus == OrderStatus.Shipped ||
+                 newStatus == OrderStatus.Delivered) &&
+                order.PaymentStatus != PaymentStatus.Paid)
+                throw new BadRequestException(
+                    "Only paid orders can move into fulfillment.");
+
+            var changed = await _context.Orders
+                .Where(x => x.Id == orderId && x.Status == order.Status)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.Status, newStatus));
+
+            if (changed != 1)
+                throw new BadRequestException(
+                    "The order changed while this update was being processed. Refresh and try again.");
+
+            await NotifyAsync(order.UserId, "Order updated", $"Your order #{order.Id} is now {newStatus}.", $"/account/orders/{order.Id}");
 
             return await GetByIdAsync(order.UserId, order.Id);
         }
@@ -260,14 +304,49 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
                     "Only pending or confirmed orders can be cancelled.");
             }
 
+            if (order.PaymentStatus == PaymentStatus.Paid)
+                throw new BadRequestException(
+                    "Paid orders cannot be cancelled. Contact support to arrange a refund.");
+
+            if (order.PaymentStatus == PaymentStatus.Pending &&
+                !string.IsNullOrWhiteSpace(order.PaymentIntentId))
+                throw new BadRequestException(
+                    "An active payment session exists for this order. Complete or close it before cancelling.");
+
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync();
+
+            var changed = await _context.Orders
+                .Where(x => x.Id == orderId &&
+                            x.UserId == userId &&
+                            (x.Status == OrderStatus.Pending ||
+                             x.Status == OrderStatus.Confirmed) &&
+                            x.PaymentStatus != PaymentStatus.Paid &&
+                            !(x.PaymentStatus == PaymentStatus.Pending &&
+                              x.PaymentIntentId != null))
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.Status, OrderStatus.Cancelled));
+
+            if (changed != 1)
+                throw new BadRequestException(
+                    "The order can no longer be cancelled. Refresh and try again.");
+
             foreach (var orderItem in order.Items)
             {
-                orderItem.Product.StockQuantity += orderItem.Quantity;
+                await _context.Products
+                    .Where(product => product.Id == orderItem.ProductId)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(
+                            product => product.StockQuantity,
+                            product => product.StockQuantity + orderItem.Quantity)
+                        .SetProperty(
+                            product => product.UpdatedAt,
+                            DateTime.UtcNow));
             }
 
-            order.Status = OrderStatus.Cancelled;
+            await transaction.CommitAsync();
 
-            await _context.SaveChangesAsync();
+            await NotifyAsync(userId, "Order cancelled", $"Your order #{order.Id} has been cancelled.", $"/account/orders/{order.Id}");
 
             return await GetByIdAsync(userId, order.Id);
         }
@@ -309,13 +388,60 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
                     "Only pending or confirmed orders can be cancelled.");
             }
 
-            foreach (var orderItem in order.Items)
+            if (order.PaymentStatus == PaymentStatus.Paid)
+                throw new BadRequestException(
+                    "Paid orders cannot be automatically cancelled.");
+
+            if (order.PaymentStatus == PaymentStatus.Pending &&
+                !string.IsNullOrWhiteSpace(order.PaymentIntentId))
+                throw new BadRequestException(
+                    "An active payment session exists for this order; cancel the payment session before cancelling the order.");
+
+            await using var transaction =
+                await _context.Database.BeginTransactionAsync();
+
+            var changed = await _context.Orders
+                .Where(x => x.Id == orderId &&
+                            (x.Status == OrderStatus.Pending ||
+                             x.Status == OrderStatus.Confirmed) &&
+                            x.PaymentStatus != PaymentStatus.Paid)
+                .ExecuteUpdateAsync(updates => updates
+                    .SetProperty(x => x.Status, OrderStatus.Cancelled));
+
+            if (changed == 0)
             {
-                orderItem.Product.StockQuantity += orderItem.Quantity;
+                await transaction.CommitAsync();
+                return;
             }
 
-            order.Status = OrderStatus.Cancelled;
+            foreach (var orderItem in order.Items)
+            {
+                await _context.Products
+                    .Where(product => product.Id == orderItem.ProductId)
+                    .ExecuteUpdateAsync(updates => updates
+                        .SetProperty(
+                            product => product.StockQuantity,
+                            product => product.StockQuantity + orderItem.Quantity)
+                        .SetProperty(
+                            product => product.UpdatedAt,
+                            DateTime.UtcNow));
+            }
 
+            await transaction.CommitAsync();
+
+            await NotifyAsync(order.UserId, "Order cancelled", $"Your order #{order.Id} has been cancelled.", $"/account/orders/{order.Id}");
+        }
+
+        private async Task NotifyAsync(string userId, string title, string message, string link)
+        {
+            _context.Notifications.Add(new StoreNotification
+            {
+                UserId = userId,
+                Title = title,
+                Message = message,
+                Type = "Order",
+                Link = link
+            });
             await _context.SaveChangesAsync();
         }
 
@@ -360,6 +486,7 @@ namespace AccessoriesStore.Infrastructure.Services.Orders
                 Total = order.Total,
                 Notes = order.Notes,
                 Status = order.Status.ToString(),
+                PaymentStatus = order.PaymentStatus.ToString(),
                 CreatedAt = order.CreatedAt,
 
                 Address = new AddressResponse

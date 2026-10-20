@@ -85,6 +85,7 @@ public class ProductReviewService : IProductReviewService
         {
             Id = review.Id,
             ProductId = review.ProductId,
+            UserId = userId,
             UserName = $"{user.FirstName} {user.LastName}",
             Rating = review.Rating,
             Comment = review.Comment,
@@ -133,6 +134,7 @@ public class ProductReviewService : IProductReviewService
         {
             Id = review.Id,
             ProductId = review.ProductId,
+            UserId = userId,
             UserName = $"{user.FirstName} {user.LastName}",
             Rating = review.Rating,
             Comment = review.Comment,
@@ -180,6 +182,7 @@ public class ProductReviewService : IProductReviewService
             {
                 Id = r.Id,
                 ProductId = r.ProductId,
+                UserId = r.UserId,
                 UserName = _context.Users
                     .Where(u => u.Id == r.UserId)
                     .Select(u => u.FirstName + " " + u.LastName)

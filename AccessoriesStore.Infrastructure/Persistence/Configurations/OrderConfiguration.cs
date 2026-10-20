@@ -28,6 +28,21 @@ namespace AccessoriesStore.Infrastructure.Persistence.Configurations
             builder.Property(o => o.Notes)
                 .HasMaxLength(1000);
 
+            builder.Property(o => o.PaymentIntentId)
+                .HasMaxLength(100);
+
+            builder.Property(o => o.UserId)
+                .HasMaxLength(450)
+                .IsRequired();
+
+            builder.HasIndex(o => o.PaymobOrderId)
+                .IsUnique();
+
+            builder.HasIndex(o => o.PaymentIntentId)
+                .IsUnique();
+
+            builder.HasIndex(o => new { o.UserId, o.CreatedAt });
+
             builder.HasMany(o => o.Items)
                 .WithOne(i => i.Order)
                 .HasForeignKey(i => i.OrderId)

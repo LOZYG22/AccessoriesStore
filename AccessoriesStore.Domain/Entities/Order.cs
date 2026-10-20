@@ -1,6 +1,7 @@
 ﻿using AccessoriesStore.Domain.Enums;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel.DataAnnotations;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -39,6 +40,7 @@ namespace AccessoriesStore.Domain.Entities
         public OrderStatus Status { get; set; } = OrderStatus.Pending;
         public PaymentStatus PaymentStatus { get; set; } = PaymentStatus.Pending;
 
+        [MaxLength(255)]
         public string? PaymentIntentId { get; set; }
         public long? PaymobOrderId { get; set; }
         public DateTime? PaidAt { get; set; }

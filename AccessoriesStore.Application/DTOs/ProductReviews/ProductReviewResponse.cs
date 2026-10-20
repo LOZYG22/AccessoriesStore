@@ -6,6 +6,9 @@ namespace AccessoriesStore.Application.DTOs.ProductReviews
         public int Id { get; set; }
 
         public int ProductId { get; set; }
+        public bool IsMine { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore]
+        public string UserId { get; set; } = string.Empty;
 
         public string UserName { get; set; } = string.Empty;
         public int Rating { get; set; }

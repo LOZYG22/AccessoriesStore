@@ -25,20 +25,17 @@ public class InventoryService : IInventoryService
                 "Quantity must be greater than zero.");
         }
 
-        var product = await _context.Products
-            .FirstOrDefaultAsync(p => p.Id == productId);
+        var updatedAt = DateTime.UtcNow;
+        var changed = await _context.Products
+            .Where(p => p.Id == productId)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(
+                    p => p.StockQuantity,
+                    p => p.StockQuantity + request.Quantity)
+                .SetProperty(p => p.UpdatedAt, updatedAt));
 
-        if (product is null)
-        {
-            throw new NotFoundException(
-                "Product not found.");
-        }
-
-        product.StockQuantity += request.Quantity;
-
-        product.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
+        if (changed == 0)
+            throw new NotFoundException("Product not found.");
     }
 
     public async Task RemoveStockAsync(
@@ -51,25 +48,24 @@ public class InventoryService : IInventoryService
                 "Quantity must be greater than zero.");
         }
 
-        var product = await _context.Products
-            .FirstOrDefaultAsync(p => p.Id == productId);
+        var updatedAt = DateTime.UtcNow;
+        var changed = await _context.Products
+            .Where(p => p.Id == productId && p.StockQuantity >= request.Quantity)
+            .ExecuteUpdateAsync(updates => updates
+                .SetProperty(
+                    p => p.StockQuantity,
+                    p => p.StockQuantity - request.Quantity)
+                .SetProperty(p => p.UpdatedAt, updatedAt));
 
-        if (product is null)
+        if (changed == 0)
         {
-            throw new NotFoundException(
-                "Product not found.");
+            var exists = await _context.Products
+                .AnyAsync(p => p.Id == productId);
+
+            if (!exists)
+                throw new NotFoundException("Product not found.");
+
+            throw new BadRequestException("Insufficient stock.");
         }
-
-        if (product.StockQuantity < request.Quantity)
-        {
-            throw new BadRequestException(
-                "Insufficient stock.");
-        }
-
-        product.StockQuantity -= request.Quantity;
-
-        product.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
     }
 }

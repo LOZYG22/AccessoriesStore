@@ -16,6 +16,7 @@ namespace AccessoriesStore.Application.DTOs.Orders
         public decimal Total { get; set; }
         public string? Notes { get; set; }
         public string Status { get; set; } = string.Empty;
+        public string PaymentStatus { get; set; } = string.Empty;
         public DateTime CreatedAt { get; set; }
         public AddressResponse Address { get; set; } = null!;
         public List<OrderItemResponse> Items { get; set; } = new();

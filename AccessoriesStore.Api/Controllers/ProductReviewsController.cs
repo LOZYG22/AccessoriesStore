@@ -40,6 +40,8 @@ public class ProductReviewsController : ControllerBase
             productId,
             request);
 
+        review.IsMine = true;
+
         return Ok(
             ApiResponse<ProductReviewResponse>.SuccessResponse(
                 review,
@@ -65,6 +67,8 @@ public class ProductReviewsController : ControllerBase
             userId,
             reviewId,
             request);
+
+        review.IsMine = true;
 
         return Ok(
             ApiResponse<ProductReviewResponse>.SuccessResponse(
@@ -103,6 +107,12 @@ public class ProductReviewsController : ControllerBase
     {
         var reviews = await _reviewService
             .GetByProductIdAsync(productId);
+
+        var currentUserId = User.FindFirstValue(ClaimTypes.NameIdentifier);
+        foreach (var review in reviews)
+        {
+            review.IsMine = !string.IsNullOrEmpty(currentUserId) && review.UserId == currentUserId;
+        }
 
         return Ok(
             ApiResponse<IEnumerable<ProductReviewResponse>>

@@ -121,6 +121,7 @@ namespace AccessoriesStore.Infrastructure.Services.Products
         {
             var product = await _context.Products
                 .AsNoTracking()
+                .AsSplitQuery()
                 .Where(p => p.IsActive)
                 .Include(p => p.Category)
                 .Include(p => p.Images)
@@ -166,6 +167,7 @@ namespace AccessoriesStore.Infrastructure.Services.Products
         {
             var product = await _context.Products
                 .AsNoTracking()
+                .AsSplitQuery()
                 .Where(p => p.IsActive)
                 .Include(p => p.Category)
                 .Include(p => p.Images)
@@ -186,6 +188,7 @@ namespace AccessoriesStore.Infrastructure.Services.Products
                 Price = product.Price,
                 DiscountPrice = product.DiscountPrice,
                 SKU = product.SKU,
+                StockQuantity = product.StockQuantity,
                 CategoryId = product.CategoryId,
                 CategoryName = product.Category.Name,
                 IsActive = product.IsActive,
